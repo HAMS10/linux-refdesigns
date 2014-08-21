@@ -89,6 +89,8 @@ static void *rx_ch;
 int pathfinder_poll(void *data)
 {
 	int run = 1;
+	
+	u32 msg[2] = {pathfinder_device.data_write_period, 0};
 
 	while (run) {
 		while ((pathfinder_device.pending == 0)
@@ -113,14 +115,14 @@ int pathfinder_poll(void *data)
 			writel(0, (pathfinder_device.ocram
 				+ pathfinder_device.size - 4));
 
-			pathfinder_device.pending = 0;
-
 		} else {
-			if (pathfinder_device.state == 1) {
+			if (pathfinder_device.state == 0) {
+				/* Handshaking mailbox for polling mode here */
+				ipc_send_message(tx_ch, (void *)msg);
 				pathfinder_device.pending = 0;
-				run = 0;
 			} else {
 				pathfinder_device.pending = 0;
+				run = 0;
 			}
 		}
 	}
@@ -189,9 +191,6 @@ void pathfinder_rx_mbox_cb(void *cl_id, void *mssg)
 	/* Clearing magic number from memory */
 	writel(0, (pathfinder_device.ocram + pathfinder_device.size - 4));
 
-	/* Setting the pending flag */
-	pathfinder_device.pending = 1;
-
 	/* Start delayed work to create new thread if necessary */
 	if (temp_state != pathfinder_device.state) {
 		pathfinder_device.state = temp_state;
@@ -200,11 +199,14 @@ void pathfinder_rx_mbox_cb(void *cl_id, void *mssg)
 				, 0);
 	}
 
-	/* Responding mailbox with HPS data write latency */
-	data[0] = pathfinder_device.data_write_period;
-	ipc_send_message(tx_ch, (void *)data);
+	/* handshaking mailbox for interrupt mode here */
+	if (temp_state == 1) {
+		data[0] = pathfinder_device.data_write_period;
+		ipc_send_message(tx_ch, (void *)data);
+	}
 
-
+	/* Setting the pending flag */
+	pathfinder_device.pending = 1;
 }
 
 static int __init pathfinder_init(void)
