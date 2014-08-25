@@ -1,4 +1,4 @@
-C_SRC := pathfinder-fibonacci.c
+C_SRC := fibonacci.c
 CFLAGS := -Werror -Wall
 
 ifeq ($(or $(COMSPEC),$(ComSpec)),)

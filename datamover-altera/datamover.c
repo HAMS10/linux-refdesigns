@@ -1,5 +1,5 @@
 /*
- * Pathfinder design example
+ * Data mover design example
  *
  * Copyright Altera Corporation (C) 2014. All rights reserved
  * This program is free software; you can redistribute it and/or modify it
@@ -62,7 +62,7 @@
 #define PERF_START_MEASURING(p)		PERF_BEGIN((p), 0)
 #define GET_PERF_RESULT(p, n)		readl((p) + ((((n)*4))*4))
 
-struct pf_struct {
+struct dm_struct {
 	void __iomem *perfcounter_nii;
 	void __iomem *perfcounter_hps;
 	void __iomem *msgdma_nii;
@@ -80,48 +80,48 @@ struct pf_struct {
 	struct delayed_work create_thread;
 };
 
-static struct pf_struct pathfinder_device;
+static struct dm_struct datamover_device;
 static struct task_struct *task;
 static void *tx_ch;
 static void *rx_ch;
 
 
-int pathfinder_poll(void *data)
+int datamover_poll(void *data)
 {
 	int run = 1;
 	
-	u32 msg[2] = {pathfinder_device.data_write_period, 0};
+	u32 msg[2] = {datamover_device.data_write_period, 0};
 
 	while (run) {
-		while ((pathfinder_device.pending == 0)
-			&& (ioread32(pathfinder_device.ocram
-				+ pathfinder_device.size - 4) != MAGIC_WORD))
+		while ((datamover_device.pending == 0)
+			&& (ioread32(datamover_device.ocram
+				+ datamover_device.size - 4) != MAGIC_WORD))
 			;
 
-		if (pathfinder_device.pending == 0) {
+		if (datamover_device.pending == 0) {
 			/* Stop ingress performance counter */
-			writel(0, pathfinder_device.perfcounter_nii +
+			writel(0, datamover_device.perfcounter_nii +
 				INGRESS_STOP_OFFSET);
 
 			/* Send regress data transfer command */
-			writel(SGDMA_GO_CMD, pathfinder_device.msgdma_hps +
+			writel(SGDMA_GO_CMD, datamover_device.msgdma_hps +
 				SGDMA_DES_CONTROL_OFFSET);
 
 			/* Start regress performance counter */
-			writel(0, pathfinder_device.perfcounter_nii +
+			writel(0, datamover_device.perfcounter_nii +
 				REGRESS_START_OFFSET);
 
 			/* Clear magic word for next iteration */
-			writel(0, (pathfinder_device.ocram
-				+ pathfinder_device.size - 4));
+			writel(0, (datamover_device.ocram
+				+ datamover_device.size - 4));
 
 		} else {
-			if (pathfinder_device.state == 0) {
+			if (datamover_device.state == 0) {
 				/* Handshaking mailbox for polling mode here */
 				ipc_send_message(tx_ch, (void *)msg);
-				pathfinder_device.pending = 0;
+				datamover_device.pending = 0;
 			} else {
-				pathfinder_device.pending = 0;
+				datamover_device.pending = 0;
 				run = 0;
 			}
 		}
@@ -134,8 +134,8 @@ int pathfinder_poll(void *data)
 
 static void create_thread(struct work_struct *work)
 {
-	task = kthread_create(&pathfinder_poll, &pathfinder_device,
-		"pathfinder_poll");
+	task = kthread_create(&datamover_poll, &datamover_device,
+		"datamover_poll");
 
 	kthread_bind(task, CPU_ID);
 
@@ -151,65 +151,65 @@ static void create_thread(struct work_struct *work)
 irqreturn_t msgdma_isr(int this_irq, void *dev_id)
 {
 	/* Clear msgdma interrupt */
-	writel(readl(pathfinder_device.msgdma_nii),
-		pathfinder_device.msgdma_nii);
+	writel(readl(datamover_device.msgdma_nii),
+		datamover_device.msgdma_nii);
 
 	/* Stop ingress performance counter */
-	writel(0, pathfinder_device.perfcounter_nii +
+	writel(0, datamover_device.perfcounter_nii +
 		INGRESS_STOP_OFFSET);
 
 	/* Send regress data transfer command */
-	writel(SGDMA_GO_CMD, pathfinder_device.msgdma_hps +
+	writel(SGDMA_GO_CMD, datamover_device.msgdma_hps +
 		SGDMA_DES_CONTROL_OFFSET);
 
 	/* Start regress performance counter */
-	writel(0, pathfinder_device.perfcounter_nii +
+	writel(0, datamover_device.perfcounter_nii +
 		REGRESS_START_OFFSET);
 
 	return IRQ_HANDLED;
 }
 
 
-void pathfinder_rx_mbox_cb(void *cl_id, void *mssg)
+void datamover_rx_mbox_cb(void *cl_id, void *mssg)
 {
 	u32 *data = (u32 *)mssg;
 	u32 temp_state;
 
 	/* Process mailbox commands */
-	pathfinder_device.size = data[0] & CMD_SIZE_MSK;
+	datamover_device.size = data[0] & CMD_SIZE_MSK;
 	temp_state = (data[0] & CMD_MODE_MSK) >> 30;
 
 	/* Notification on change of mode */
 	if (temp_state == 0) {
-		pr_info("Pathfinder CMD: Mode: poll, Data Size: %d\n",
-			pathfinder_device.size);
+		pr_info("Datamover CMD: Mode: poll, Data Size: %d\n",
+			datamover_device.size);
 	} else {
-		pr_info("Pathfinder CMD: Mode: interrupt, Data Size: %d\n",
-			pathfinder_device.size);
+		pr_info("Datamover CMD: Mode: interrupt, Data Size: %d\n",
+			datamover_device.size);
 	}
 
 	/* Clearing magic number from memory */
-	writel(0, (pathfinder_device.ocram + pathfinder_device.size - 4));
+	writel(0, (datamover_device.ocram + datamover_device.size - 4));
 
 	/* Start delayed work to create new thread if necessary */
-	if (temp_state != pathfinder_device.state) {
-		pathfinder_device.state = temp_state;
-		if (pathfinder_device.state == 0)
-			schedule_delayed_work(&pathfinder_device.create_thread
+	if (temp_state != datamover_device.state) {
+		datamover_device.state = temp_state;
+		if (datamover_device.state == 0)
+			schedule_delayed_work(&datamover_device.create_thread
 				, 0);
 	}
 
 	/* handshaking mailbox for interrupt mode here */
 	if (temp_state == 1) {
-		data[0] = pathfinder_device.data_write_period;
+		data[0] = datamover_device.data_write_period;
 		ipc_send_message(tx_ch, (void *)data);
 	}
 
 	/* Setting the pending flag */
-	pathfinder_device.pending = 1;
+	datamover_device.pending = 1;
 }
 
-static int __init pathfinder_init(void)
+static int __init datamover_init(void)
 {
 	struct ipc_client mbox_rx;
 	struct ipc_client mbox_tx;
@@ -218,7 +218,7 @@ static int __init pathfinder_init(void)
 	int ret;
 
 	mbox_rx.txcb = NULL;
-	mbox_rx.rxcb = pathfinder_rx_mbox_cb;
+	mbox_rx.rxcb = datamover_rx_mbox_cb;
 	mbox_rx.cl_id = NULL;
 	mbox_rx.tx_block = false;
 	mbox_rx.tx_tout = 0;
@@ -234,16 +234,16 @@ static int __init pathfinder_init(void)
 	mbox_tx.knows_txdone = false;
 
 
-	pathfinder_device.pending = 0;
-	pathfinder_device.state = -1;
+	datamover_device.pending = 0;
+	datamover_device.state = -1;
 
 	/* Allocate the region of On Chip Ram 0xFFFF0000 */
 	if (!request_mem_region(OCRAM_ADDR, OCRAM_SIZE, "ocram")) {
 		pr_err("request mem region for ocram failed\n");
 		goto err_nodev;
 	}
-	pathfinder_device.ocram = ioremap(OCRAM_ADDR, OCRAM_SIZE);
-	if (!pathfinder_device.ocram) {
+	datamover_device.ocram = ioremap(OCRAM_ADDR, OCRAM_SIZE);
+	if (!datamover_device.ocram) {
 		pr_err("Failed to map on chip ram");
 		goto err_nodev;
 	}
@@ -255,9 +255,9 @@ static int __init pathfinder_init(void)
 		goto err_nodev;
 	}
 
-	pathfinder_device.perfcounter_nii = ioremap(PERF_COUNTER_NII_ADDR,
+	datamover_device.perfcounter_nii = ioremap(PERF_COUNTER_NII_ADDR,
 		PERF_SIZE);
-	if (!pathfinder_device.perfcounter_nii) {
+	if (!datamover_device.perfcounter_nii) {
 		pr_err("Failed to map perfcounter\n");
 		goto err_nodev;
 	}
@@ -269,9 +269,9 @@ static int __init pathfinder_init(void)
 		goto err_nodev;
 	}
 
-	pathfinder_device.perfcounter_hps = ioremap(PERF_COUNTER_HPS_ADDR,
+	datamover_device.perfcounter_hps = ioremap(PERF_COUNTER_HPS_ADDR,
 		PERF_SIZE);
-	if (!pathfinder_device.perfcounter_hps) {
+	if (!datamover_device.perfcounter_hps) {
 		pr_err("failed to map perfcounter\n");
 		goto err_nodev;
 	}
@@ -283,10 +283,10 @@ static int __init pathfinder_init(void)
 		goto err_nodev;
 	}
 
-	pathfinder_device.msgdma_nii = ioremap(SGDMA_NII_CSR_ADDR,
+	datamover_device.msgdma_nii = ioremap(SGDMA_NII_CSR_ADDR,
 		SGDMA_SIZE);
 
-	if (!pathfinder_device.msgdma_nii) {
+	if (!datamover_device.msgdma_nii) {
 		pr_err("Failed to map nios ii sdgma\n");
 		goto err_nodev;
 	}
@@ -303,10 +303,10 @@ static int __init pathfinder_init(void)
 		goto err_nodev;
 	}
 
-	pathfinder_device.msgdma_hps = ioremap(SGDMA_HPS_CSR_ADDR,
+	datamover_device.msgdma_hps = ioremap(SGDMA_HPS_CSR_ADDR,
 		SGDMA_SIZE);
 
-	if (!pathfinder_device.msgdma_hps) {
+	if (!datamover_device.msgdma_hps) {
 		pr_err("Failed to map hps sdgma\n");
 		goto err_nodev;
 	}
@@ -318,19 +318,19 @@ static int __init pathfinder_init(void)
 	tx_ch = ipc_request_channel(&mbox_tx);
 
 	/* Initialize workqueue for thread affinity creation*/
-	INIT_DELAYED_WORK(&pathfinder_device.create_thread, create_thread);
+	INIT_DELAYED_WORK(&datamover_device.create_thread, create_thread);
 
-	PERF_RESET(pathfinder_device.perfcounter_hps);
-	PERF_START_MEASURING(pathfinder_device.perfcounter_hps);
+	PERF_RESET(datamover_device.perfcounter_hps);
+	PERF_START_MEASURING(datamover_device.perfcounter_hps);
 	for (i = 0; i < 100; i++) {
-		PERF_BEGIN(pathfinder_device.perfcounter_hps, 1);
-		PERF_END(pathfinder_device.perfcounter_hps, 1);
+		PERF_BEGIN(datamover_device.perfcounter_hps, 1);
+		PERF_END(datamover_device.perfcounter_hps, 1);
 	}
 
-	pathfinder_device.data_write_period = GET_PERF_RESULT
-	(pathfinder_device.perfcounter_hps, 1);
+	datamover_device.data_write_period = GET_PERF_RESULT
+	(datamover_device.perfcounter_hps, 1);
 
-	PERF_RESET(pathfinder_device.perfcounter_hps);
+	PERF_RESET(datamover_device.perfcounter_hps);
 
 	return 0;
 
@@ -338,27 +338,27 @@ err_nodev:
 	return -1;
 }
 
-static void __exit pathfinder_exit(void)
+static void __exit datamover_exit(void)
 {
 	 /* Release OCRAM */
 	 release_mem_region(OCRAM_ADDR, OCRAM_SIZE);
-	 iounmap(pathfinder_device.ocram);
+	 iounmap(datamover_device.ocram);
 
 	 /* Release Nios II performance counter */
 	 release_mem_region(PERF_COUNTER_NII_ADDR, PERF_SIZE);
-	 iounmap(pathfinder_device.perfcounter_nii);
+	 iounmap(datamover_device.perfcounter_nii);
 
 	 /* Release HPS performance counter */
 	 release_mem_region(PERF_COUNTER_HPS_ADDR, PERF_SIZE);
-	 iounmap(pathfinder_device.perfcounter_hps);
+	 iounmap(datamover_device.perfcounter_hps);
 
 	 /* Release Nios II SGDMA */
 	 release_mem_region(SGDMA_NII_CSR_ADDR, SGDMA_SIZE);
-	 iounmap(pathfinder_device.msgdma_nii);
+	 iounmap(datamover_device.msgdma_nii);
 
 	 /* Release HPS SGDMA */
 	 release_mem_region(SGDMA_HPS_CSR_ADDR, SGDMA_SIZE);
-	 iounmap(pathfinder_device.msgdma_hps);
+	 iounmap(datamover_device.msgdma_hps);
 
 	 /* Free up SGDMA IRQ */
 	 free_irq(SGDMA_NII_IRQ, 0);
@@ -372,6 +372,6 @@ static void __exit pathfinder_exit(void)
 
 MODULE_LICENSE("GPL");
 
-module_init(pathfinder_init);
-module_exit(pathfinder_exit);
+module_init(datamover_init);
+module_exit(datamover_exit);
 

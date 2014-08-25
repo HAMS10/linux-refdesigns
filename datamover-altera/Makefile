@@ -1,4 +1,4 @@
-obj-m := pathfinder.o
+obj-m := datamover.o
 
 SRC := $(shell pwd)
 
